@@ -1,20 +1,35 @@
-use std::env;
-use std::io::{stdin, BufRead};
-use std::process::{exit, Command};
+mod subprocess;
+
+use nix::sys::signal::{signal, SigHandler, Signal};
+use std::io::{stdin, BufRead, Write};
+use std::process::exit;
+use std::{env, io};
+
+use crate::subprocess::Subprocess;
+
+extern "C" fn handle_sigint(_: libc::c_int) {
+    println!("");
+}
 
 fn main() -> ! {
+    unsafe { signal(Signal::SIGINT, SigHandler::Handler(handle_sigint)) }
+        .expect("Error changing SIGINT handling");
+
     loop {
+        // prompt message
+        print!("% ");
+        io::stdout().flush().expect("error printing prompt");
+
         let mut cmd = String::new();
-        for line_res in stdin().lock().lines() {
-            let line = line_res.expect("Read a line from stdin failed");
-            cmd = line;
-            break;
+        match stdin().lock().read_line(&mut cmd) {
+            Ok(0) => exit(0),
+            _ => (),
         }
         let mut args = cmd.split_whitespace();
         let prog = args.next();
 
         match prog {
-            None => panic!("Not program input"),
+            None => (),
             Some(prog) => match prog {
                 "cd" => {
                     let dir = args.next().expect("No enough args to set current dir");
@@ -35,12 +50,12 @@ fn main() -> ! {
                 "exit" => {
                     exit(0);
                 }
-                _ => {
-                    Command::new(prog)
-                        .args(args)
-                        .status()
-                        .expect("Run program failed");
-                }
+                _ => match Subprocess::new(prog, &args.map(|s| s.to_string()).collect()) {
+                    Some(subprocess) => {
+                        subprocess.wait().expect("Error running subprocess");
+                    }
+                    _ => println!("Failed to start the program"),
+                },
             },
         }
     }
