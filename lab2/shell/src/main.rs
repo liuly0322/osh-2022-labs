@@ -1,19 +1,22 @@
-mod subprocess;
-
+use nix::errno::Errno;
 use nix::sys::signal::{signal, SigHandler, Signal};
+use nix::sys::wait::wait;
 use std::io::{stdin, BufRead, Write};
-use std::process::exit;
+use std::process::{exit, Child, Command};
 use std::{env, io};
 
-use crate::subprocess::Subprocess;
-
 extern "C" fn handle_sigint(_: libc::c_int) {
-    println!("");
+    print!("\n");
+    match wait() {
+        Err(Errno::ECHILD) => print!("% "),
+        _ => (),
+    }
+    io::stdout().flush().expect("error printing prompt");
 }
 
 fn main() -> ! {
     unsafe { signal(Signal::SIGINT, SigHandler::Handler(handle_sigint)) }
-        .expect("Error changing SIGINT handling");
+        .expect("Error changing SIGINT handler");
 
     loop {
         // prompt message
@@ -50,13 +53,24 @@ fn main() -> ! {
                 "exit" => {
                     exit(0);
                 }
-                _ => match Subprocess::new(prog, &args.map(|s| s.to_string()).collect()) {
-                    Some(subprocess) => {
-                        subprocess.wait().expect("Error running subprocess");
-                    }
+                _ => match subprocess(prog, &args.map(|s| s.to_string()).collect()) {
+                    Some(_) => loop {
+                        match wait() {
+                            Err(Errno::ECHILD) => break,
+                            _ => (),
+                        }
+                    },
                     _ => println!("Failed to start the program"),
                 },
             },
         }
     }
+}
+
+// returns Some(Child) if successful
+fn subprocess(target: &str, args: &Vec<String>) -> Option<Child> {
+    let mut command = Command::new(target);
+    let command = command.args(args);
+    let command = command.spawn().ok()?;
+    Some(command)
 }
