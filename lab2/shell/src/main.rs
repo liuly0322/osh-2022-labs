@@ -129,7 +129,7 @@ fn main() -> ! {
                     let home = env::var("HOME");
                     let dir = match dir {
                         Some(dir) if dir == "-" => prev_path.to_owned(),
-                        Some(dir) if dir.starts_with("~") => match home {
+                        Some(dir) if dir == "~" || dir.starts_with("~/") => match home {
                             Ok(home) => home + dir.strip_prefix("~").unwrap(),
                             _ => {
                                 println!("$HOME is unset");
