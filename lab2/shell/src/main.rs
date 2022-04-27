@@ -15,6 +15,8 @@ const COLOR_RED: &str = "\x1B[38;5;9m";
 const COLOR_GREEN: &str = "\x1B[38;5;10m";
 const CLEAR_COLOR: &str = "\x1B[0m";
 
+const CWD_ERR: &str = "Getting current dir failed";
+
 /// indicates last task exit code
 static EXITCODE: AtomicI32 = AtomicI32::new(0);
 
@@ -38,6 +40,7 @@ fn main() -> ! {
     };
     let mut history = History::new(history_file_name).expect("History file i/o error");
     let mut prev_cmd = String::new();
+    let mut prev_path = get_cur_path();
 
     loop {
         // prompt message
@@ -54,7 +57,7 @@ fn main() -> ! {
         let mut command_changed = false;
         let get_command = |command: Option<&String>| -> String {
             match command {
-                Some(s) => s.clone(),
+                Some(cmd) => cmd.to_owned(),
                 _ => String::new(),
             }
         };
@@ -62,7 +65,7 @@ fn main() -> ! {
             let s = cmd.strip_prefix("!").unwrap().trim();
             if s.starts_with("!") {
                 command_changed = true;
-                cmd = prev_cmd.clone();
+                cmd = prev_cmd.to_owned();
             } else {
                 let number = s.parse::<usize>();
                 match number {
@@ -123,9 +126,18 @@ fn main() -> ! {
                 }
                 "cd" => {
                     let dir = args.next();
+                    let home = env::var("HOME");
                     let dir = match dir {
+                        Some(dir) if dir == "-" => prev_path.to_owned(),
+                        Some(dir) if dir.starts_with("~") => match home {
+                            Ok(home) => home + dir.strip_prefix("~").unwrap(),
+                            _ => {
+                                println!("$HOME is unset");
+                                String::new()
+                            }
+                        },
                         Some(dir) => dir,
-                        _ => match env::var("HOME") {
+                        _ => match home {
                             Ok(home) => home,
                             _ => {
                                 println!("$HOME is unset");
@@ -133,14 +145,14 @@ fn main() -> ! {
                             }
                         },
                     };
+                    let cur_path = get_cur_path();
                     match env::set_current_dir(dir) {
                         Err(_) => println!("Changing current dir failed"),
-                        _ => (),
+                        _ => prev_path = cur_path,
                     }
                 }
                 "pwd" => {
-                    let err = "Getting current dir failed";
-                    println!("{}", env::current_dir().expect(err).to_str().expect(err));
+                    println!("{}", get_cur_path());
                 }
                 "export" => {
                     for arg in args {
@@ -188,7 +200,7 @@ fn print_prompt() -> () {
 }
 
 fn prompt_path() -> String {
-    let cwd = env::current_dir().expect("Getting current dir failed");
+    let cwd = env::current_dir().expect(CWD_ERR);
     let cwd = cwd.as_path();
     let home = env::var("HOME");
     let path_err = "Invalid path name";
@@ -209,4 +221,12 @@ fn prompt_path() -> String {
         }
         _ => cwd.to_str().expect(path_err).to_string(),
     }
+}
+
+fn get_cur_path() -> String {
+    env::current_dir()
+        .expect(CWD_ERR)
+        .to_str()
+        .expect(CWD_ERR)
+        .to_string()
 }
