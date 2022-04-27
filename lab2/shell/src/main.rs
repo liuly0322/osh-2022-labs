@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 const COLOR_RED: &str = "\x1B[38;5;9m";
 const COLOR_GREEN: &str = "\x1B[38;5;10m";
+const COLOR_YELLOW: &str = "\x1B[38;5;11m";
 const CLEAR_COLOR: &str = "\x1B[0m";
 
 const CWD_ERR: &str = "Getting current dir failed";
@@ -47,41 +48,38 @@ fn main() -> ! {
         INPUTING.store(true, Ordering::Relaxed);
         print_prompt();
 
+        // read line
         let mut cmd = String::new();
-        match stdin().read_line(&mut cmd) {
-            Ok(0) => exit(0),
-            _ => (),
+        if let Some(0) = stdin().read_line(&mut cmd).ok() {
+            exit(0)
         }
 
         // if ! and !!
         let mut command_changed = false;
-        let get_command = |command: Option<&String>| -> String {
-            match command {
-                Some(cmd) => cmd.to_owned(),
-                _ => String::new(),
-            }
-        };
         if cmd.starts_with("!") {
             let s = cmd.strip_prefix("!").unwrap().trim();
-            if s.starts_with("!") {
+            cmd = if s.starts_with("!") {
                 command_changed = true;
-                cmd = prev_cmd.to_owned();
+                prev_cmd.to_owned()
             } else {
                 let number = s.parse::<usize>();
                 match number {
                     Ok(0) | Err(_) => {
-                        println!("Invalid input number");
-                        cmd = String::new()
+                        println!("Invalid history number");
+                        String::new()
                     }
                     Ok(number) => {
                         command_changed = true;
-                        cmd = get_command(history.get(number));
+                        match history.get(number).cloned() {
+                            Some(cmd) => cmd,
+                            _ => continue,
+                        }
                     }
                 }
-            }
+            };
         }
         if command_changed {
-            println!("{}", &cmd)
+            println!("> {}{}{}", COLOR_YELLOW, &cmd, CLEAR_COLOR)
         } else {
             history.push(&cmd);
         }
@@ -91,10 +89,7 @@ fn main() -> ! {
         let mut args = args.map(|s| {
             if s.starts_with("$") {
                 let key = s.strip_prefix("$").unwrap();
-                match env::var(key) {
-                    Ok(value) => value,
-                    _ => String::new(),
-                }
+                env::var(key).unwrap_or_default()
             } else {
                 s.to_string()
             }
@@ -103,9 +98,8 @@ fn main() -> ! {
 
         INPUTING.store(false, Ordering::Relaxed);
         EXITCODE.store(0, Ordering::Relaxed);
-        match prog {
-            None => (),
-            Some(prog) => match prog.as_str() {
+        if let Some(prog) = prog {
+            match prog.as_str() {
                 "history" => {
                     let number = args.next();
                     let number = match number {
@@ -177,7 +171,7 @@ fn main() -> ! {
                     },
                     _ => println!("Failed to start the program: {}", &prog),
                 },
-            },
+            }
         }
     }
 }
