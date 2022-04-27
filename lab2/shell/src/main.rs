@@ -5,11 +5,11 @@ use nix::errno::Errno;
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::sys::wait::{wait, WaitStatus};
 use std::cmp::min;
-use std::io::{stdin, Write};
+use std::env;
+use std::io::{self, stdin, Write};
 use std::path::Path;
 use std::process::{exit, Child, Command};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::{env, io};
 
 const COLOR_RED: &str = "\x1B[38;5;9m";
 const COLOR_GREEN: &str = "\x1B[38;5;10m";
@@ -223,6 +223,7 @@ fn prompt_path() -> String {
     }
 }
 
+/// Return String of current working directory
 fn get_cur_path() -> String {
     env::current_dir()
         .expect(CWD_ERR)
