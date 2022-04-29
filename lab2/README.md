@@ -35,7 +35,7 @@ rm ~/.llysh_history
 - 支持显示当进程退出（但没有正常退出时）显示退出代码，例如：
   ```shell
   ~/osh-2022/lab2/shell> test
-  [1]> ~/osh-2022/lab2/shell>
+  [1]~/osh-2022/lab2/shell>
   ```
   显示退出代码 1
 

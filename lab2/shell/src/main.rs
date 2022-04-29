@@ -187,7 +187,7 @@ fn subprocess(target: &String, args: &Vec<String>) -> Option<Child> {
 fn print_prompt() -> () {
     let exit_code = EXITCODE.load(Ordering::Relaxed);
     if exit_code != 0 {
-        print!("{}[{}]{}> ", COLOR_RED, exit_code, CLEAR_COLOR);
+        print!("{}[{}]{}", COLOR_RED, exit_code, CLEAR_COLOR);
     }
     print!("{}{}{}> ", COLOR_GREEN, &prompt_path(), CLEAR_COLOR);
     io::stdout().flush().expect("error printing prompt");
