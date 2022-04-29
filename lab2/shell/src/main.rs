@@ -40,7 +40,6 @@ fn main() -> ! {
         _ => "/tmp/.llysh_history".to_string(),
     };
     let mut history = History::new(history_file_name).expect("History file i/o error");
-    let mut prev_cmd = String::new();
     let mut prev_path = get_cur_path();
 
     loop {
@@ -53,6 +52,7 @@ fn main() -> ! {
         if let Some(0) = stdin().read_line(&mut cmd).ok() {
             exit(0)
         }
+        let mut cmd = cmd.trim().to_string();
 
         // if ! and !!
         let mut command_changed = false;
@@ -60,14 +60,14 @@ fn main() -> ! {
             let s = cmd.strip_prefix("!").unwrap().trim();
             cmd = if s.starts_with("!") {
                 command_changed = true;
-                prev_cmd.to_owned()
+                match history.last().cloned() {
+                    Some(cmd) => cmd,
+                    _ => continue,
+                }
             } else {
                 let number = s.parse::<usize>();
                 match number {
-                    Ok(0) | Err(_) => {
-                        println!("Invalid history number");
-                        String::new()
-                    }
+                    Err(_) => continue,
                     Ok(number) => {
                         command_changed = true;
                         match history.get(number).cloned() {
@@ -80,10 +80,10 @@ fn main() -> ! {
         }
         if command_changed {
             println!("> {}{}{}", COLOR_YELLOW, &cmd, CLEAR_COLOR)
-        } else {
+        }
+        if cmd != history.last().cloned().unwrap_or_default() {
             history.push(&cmd);
         }
-        prev_cmd = cmd.clone();
 
         let args = cmd.split_whitespace();
         let mut args = args.map(|s| {

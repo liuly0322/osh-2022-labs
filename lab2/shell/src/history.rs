@@ -31,15 +31,19 @@ impl History {
             .append(true)
             .open(&self.file_name)
             .unwrap();
-        file.write_all(command.as_bytes()).unwrap();
+        writeln!(file, "{}", command).expect("save history file error");
     }
 
     pub fn size(&self) -> usize {
         self.lines.len()
     }
 
+    pub fn last(&self) -> Option<&String> {
+        self.rget(0)
+    }
+
     pub fn get(&self, num: usize) -> Option<&String> {
-        if num - 1 < self.size() {
+        if num > 0 && num - 1 < self.size() {
             Some(&self.lines[num - 1])
         } else {
             None
@@ -47,7 +51,7 @@ impl History {
     }
 
     pub fn rget(&self, num: usize) -> Option<&String> {
-        if self.size() - 1 - num < self.size() {
+        if self.size() >= num + 1 && self.size() - 1 - num < self.size() {
             Some(&self.lines[self.size() - 1 - num])
         } else {
             None
