@@ -97,31 +97,34 @@ fn main() -> ! {
             .collect();
         let commands: Vec<&[String]> = tokens.split(|s| s == "|").collect();
 
+        // util function to divide program name and args from a command
+        let parse_command = |command: &[String]| -> (String, Vec<String>) {
+            let mut token_iter = command.iter();
+            let prog = token_iter.next().cloned().unwrap_or_default();
+            let args = token_iter.map(|s| s.to_owned()).collect();
+            (prog, args)
+        };
+
+        // execute commands
         INPUTING.store(false, Ordering::Relaxed);
         EXITCODE.store(0, Ordering::Relaxed);
         match commands.len() {
             0 => continue,
             1 => {
                 let command = commands[0];
-                let mut token_iter = command.iter();
-                let prog = token_iter.next().unwrap();
-                let args = token_iter.map(|s| s.to_owned()).collect();
+                let (prog, args) = parse_command(command);
                 match prog.as_str() {
                     "history" | "cd" | "export" | "exit" => do_built_in(&prog, &args, &mut history),
                     _ => {
-                        let child = Command::new(&prog).args(&args).spawn();
-                        match child {
-                            Ok(_) => {
-                                while match wait() {
-                                    Err(Errno::ECHILD) => false,
-                                    Ok(WaitStatus::Exited(_, code)) => {
-                                        EXITCODE.store(code, Ordering::Relaxed);
-                                        true
-                                    }
-                                    _ => true,
-                                } {}
-                            }
-                            _ => println!("Failed to start the program: {}", &prog),
+                        if let Ok(_) = Command::new(&prog).args(&args).spawn() {
+                            while match wait() {
+                                Err(Errno::ECHILD) => false,
+                                Ok(WaitStatus::Exited(_, code)) => {
+                                    EXITCODE.store(code, Ordering::Relaxed);
+                                    true
+                                }
+                                _ => true,
+                            } {}
                         }
                     }
                 }
@@ -129,17 +132,16 @@ fn main() -> ! {
             _ => {
                 let mut command_iter = commands.iter().peekable();
 
+                // stdin and stdout are changed in loop
                 let mut stdin = Stdio::inherit();
                 let mut stdout = Stdio::piped();
                 while let Some(command) = command_iter.next() {
-                    let mut token_iter = command.iter();
-                    let prog = token_iter.next().unwrap();
-                    let args: Vec<&String> = token_iter.collect();
                     let cur_process_stdout = if command_iter.peek().is_none() {
                         Stdio::inherit()
                     } else {
                         stdout
                     };
+                    let (prog, args) = parse_command(command);
                     let mut child = Command::new(&prog)
                         .args(&args)
                         .stdin(stdin)
