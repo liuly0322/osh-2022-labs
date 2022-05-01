@@ -8,15 +8,14 @@ use std::cmp::min;
 use std::env;
 use std::io::{self, stdin, Write};
 use std::path::Path;
-use std::process::{exit, Child, Command};
+use std::process::{exit, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
+/// some ansi control colors
 const COLOR_RED: &str = "\x1B[38;5;9m";
 const COLOR_GREEN: &str = "\x1B[38;5;10m";
 const COLOR_YELLOW: &str = "\x1B[38;5;11m";
 const CLEAR_COLOR: &str = "\x1B[0m";
-
-const CWD_ERR: &str = "Getting current dir failed";
 
 /// indicates last task exit code
 static EXITCODE: AtomicI32 = AtomicI32::new(0);
@@ -40,7 +39,6 @@ fn main() -> ! {
         _ => "/tmp/.llysh_history".to_string(),
     };
     let mut history = History::new(history_file_name).expect("History file i/o error");
-    let mut prev_path = get_cur_path();
 
     loop {
         // prompt message
@@ -54,7 +52,8 @@ fn main() -> ! {
         }
         let mut cmd = cmd.trim().to_string();
 
-        // if ! and !!
+        // pre-processing, if ! and !!
+        // then find the actuall command from history
         let mut command_changed = false;
         if cmd.starts_with("!") {
             let s = cmd.strip_prefix("!").unwrap().trim();
@@ -85,103 +84,139 @@ fn main() -> ! {
             history.push(&cmd);
         }
 
-        let args = cmd.split_whitespace();
-        let mut args = args.map(|s| {
-            if s.starts_with("$") {
-                let key = s.strip_prefix("$").unwrap();
-                env::var(key).unwrap_or_default()
-            } else {
-                s.to_string()
-            }
-        });
-        let prog = args.next();
+        let tokens: Vec<String> = cmd
+            .split_whitespace()
+            .map(|s| {
+                if s.starts_with("$") {
+                    let key = s.strip_prefix("$").unwrap();
+                    env::var(key).unwrap_or_default()
+                } else {
+                    s.to_string()
+                }
+            })
+            .collect();
+        let commands: Vec<&[String]> = tokens.split(|s| s == "|").collect();
 
         INPUTING.store(false, Ordering::Relaxed);
         EXITCODE.store(0, Ordering::Relaxed);
-        if let Some(prog) = prog {
-            match prog.as_str() {
-                "history" => {
-                    let number = args.next();
-                    let number = match number {
-                        Some(number) => number,
-                        _ => "10".to_string(), // default history nums
-                    };
-                    let number = match number.parse::<usize>() {
-                        Ok(number) => number,
-                        _ => {
-                            println!("Invalid input. Show 10 results...");
-                            10
+        match commands.len() {
+            0 => continue,
+            1 => {
+                let command = commands[0];
+                let mut token_iter = command.iter();
+                let prog = token_iter.next().unwrap();
+                let args = token_iter.map(|s| s.to_owned()).collect();
+                match prog.as_str() {
+                    "history" | "cd" | "export" | "exit" => do_built_in(&prog, &args, &mut history),
+                    _ => {
+                        let child = Command::new(&prog).args(&args).spawn();
+                        match child {
+                            Ok(_) => {
+                                while match wait() {
+                                    Err(Errno::ECHILD) => false,
+                                    Ok(WaitStatus::Exited(_, code)) => {
+                                        EXITCODE.store(code, Ordering::Relaxed);
+                                        true
+                                    }
+                                    _ => true,
+                                } {}
+                            }
+                            _ => println!("Failed to start the program: {}", &prog),
                         }
+                    }
+                }
+            }
+            _ => {
+                let mut command_iter = commands.iter().peekable();
+
+                let mut stdin = Stdio::inherit();
+                let mut stdout = Stdio::piped();
+                while let Some(command) = command_iter.next() {
+                    let mut token_iter = command.iter();
+                    let prog = token_iter.next().unwrap();
+                    let args: Vec<&String> = token_iter.collect();
+                    let cur_process_stdout = if command_iter.peek().is_none() {
+                        Stdio::inherit()
+                    } else {
+                        stdout
                     };
-                    let history_size = history.size();
-                    for i in (0..min(number, history_size)).rev() {
-                        println!("{:5}  {}", history_size - i, history.rget(i).unwrap())
+                    let mut child = Command::new(&prog)
+                        .args(&args)
+                        .stdin(stdin)
+                        .stdout(cur_process_stdout)
+                        .spawn()
+                        .expect("fail to execute");
+                    if command_iter.peek().is_some() {
+                        stdin = Stdio::from(child.stdout.take().expect("failed to open fd"));
+                        stdout = Stdio::piped();
+                    } else {
+                        // only for rust analyzer... in fact only the last one goes here :)
+                        break;
                     }
                 }
-                "cd" => {
-                    let dir = args.next();
-                    let home = env::var("HOME");
-                    let dir = match dir {
-                        Some(dir) if dir == "-" => prev_path.to_owned(),
-                        Some(dir) if dir == "~" || dir.starts_with("~/") => match home {
-                            Ok(home) => home + dir.strip_prefix("~").unwrap(),
-                            _ => {
-                                println!("$HOME is unset");
-                                String::new()
-                            }
-                        },
-                        Some(dir) => dir,
-                        _ => match home {
-                            Ok(home) => home,
-                            _ => {
-                                println!("$HOME is unset");
-                                String::new()
-                            }
-                        },
-                    };
-                    let cur_path = get_cur_path();
-                    match env::set_current_dir(dir) {
-                        Err(_) => println!("Changing current dir failed"),
-                        _ => prev_path = cur_path,
-                    }
-                }
-                "pwd" => {
-                    println!("{}", get_cur_path());
-                }
-                "export" => {
-                    for arg in args {
-                        let mut assign = arg.split("=");
-                        let name = assign.next().expect("No variable name");
-                        let value = assign.next().expect("No variable value");
-                        env::set_var(name, value);
-                    }
-                }
-                "exit" => {
-                    exit(0);
-                }
-                _ => match subprocess(&prog, &args.map(|s| s.to_string()).collect()) {
-                    Some(_) => loop {
-                        match wait() {
-                            Err(Errno::ECHILD) => break,
-                            Ok(WaitStatus::Exited(_, code)) => {
-                                EXITCODE.store(code, Ordering::Relaxed)
-                            }
-                            _ => (),
-                        }
-                    },
-                    _ => println!("Failed to start the program: {}", &prog),
-                },
+                while match wait() {
+                    Ok(_) => true,
+                    _ => false,
+                } {}
             }
         }
     }
 }
 
-/// returns Some(Child) if successful
-fn subprocess(target: &String, args: &Vec<String>) -> Option<Child> {
-    let mut command = Command::new(target);
-    let command = command.args(args);
-    let command = command.spawn().ok()?;
-    Some(command)
+/// built-in commands
+fn do_built_in(prog: &String, args: &Vec<String>, history: &mut History) -> () {
+    match prog.as_str() {
+        "history" => {
+            let number = args.get(0).cloned().unwrap_or_default();
+            let number = match number.parse::<usize>() {
+                Ok(number) => number,
+                _ => {
+                    println!("Invalid input. Show 10 results...");
+                    10
+                }
+            };
+            let history_size = history.size();
+            for i in (0..min(number, history_size)).rev() {
+                println!("{:5}  {}", history_size - i, history.rget(i).unwrap())
+            }
+        }
+        "cd" => {
+            let dir = args.get(0).cloned();
+            let home = env::var("HOME");
+            let dir = match dir {
+                Some(dir) if dir == "~" || dir.starts_with("~/") => match home {
+                    Ok(home) => home + dir.strip_prefix("~").unwrap(),
+                    _ => {
+                        println!("$HOME is unset");
+                        String::new()
+                    }
+                },
+                Some(dir) => dir,
+                _ => match home {
+                    Ok(home) => home,
+                    _ => {
+                        println!("$HOME is unset");
+                        String::new()
+                    }
+                },
+            };
+            if let Err(_) = env::set_current_dir(dir) {
+                println!("Changing current dir failed")
+            }
+        }
+        "export" => {
+            for arg in args {
+                let mut assign = arg.split("=");
+                let name = assign.next().expect("No variable name");
+                let value = assign.next().expect("No variable value");
+                env::set_var(name, value);
+            }
+        }
+        "exit" => {
+            exit(0);
+        }
+        _ => (),
+    }
 }
 
 fn print_prompt() -> () {
@@ -194,7 +229,7 @@ fn print_prompt() -> () {
 }
 
 fn prompt_path() -> String {
-    let cwd = env::current_dir().expect(CWD_ERR);
+    let cwd = env::current_dir().expect("Getting current dir failed");
     let cwd = cwd.as_path();
     let home = env::var("HOME");
     let path_err = "Invalid path name";
@@ -215,13 +250,4 @@ fn prompt_path() -> String {
         }
         _ => cwd.to_str().expect(path_err).to_string(),
     }
-}
-
-/// Return String of current working directory
-fn get_cur_path() -> String {
-    env::current_dir()
-        .expect(CWD_ERR)
-        .to_str()
-        .expect(CWD_ERR)
-        .to_string()
 }
