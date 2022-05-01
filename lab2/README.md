@@ -21,11 +21,5 @@ cargo build --release
   - 输入 `cd` 会跳转至 home 目录（只要没有手动 unset $HOME）
   - 允许输入路径以 `~` 开头
 - 优化 shell 显示。支持绿色显示当前路径，并且如果当前目录在 `home` 下，前缀会被替换为 `~`
-- 支持当进程退出（但没有正常退出时）显示退出代码，例如：
-  ```shell
-  ~/osh-2022/lab2/shell> test
-  [1]~/osh-2022/lab2/shell>
-  ```
-  显示退出代码 1
 
 ## Strace

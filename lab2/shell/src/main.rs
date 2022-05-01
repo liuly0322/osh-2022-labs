@@ -1,24 +1,19 @@
 pub mod history;
 
 use history::History;
-use nix::errno::Errno;
 use nix::sys::signal::{signal, SigHandler, Signal};
-use nix::sys::wait::{wait, WaitStatus};
+use nix::sys::wait::wait;
 use std::cmp::min;
 use std::env;
+use std::fs::{File, OpenOptions};
 use std::io::{self, stdin, Write};
 use std::path::Path;
 use std::process::{exit, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
-/// some ansi control colors
-const COLOR_RED: &str = "\x1B[38;5;9m";
 const COLOR_GREEN: &str = "\x1B[38;5;10m";
 const COLOR_YELLOW: &str = "\x1B[38;5;11m";
 const CLEAR_COLOR: &str = "\x1B[0m";
-
-/// indicates last task exit code
-static EXITCODE: AtomicI32 = AtomicI32::new(0);
 
 /// INPUTING indicates whether the shell is waiting for user input
 static INPUTING: AtomicBool = AtomicBool::new(true);
@@ -53,7 +48,7 @@ fn main() -> ! {
         let mut cmd = cmd.trim().to_string();
 
         // pre-processing, if ! and !!
-        // then find the actuall command from history
+        // then replace with actuall command from history
         let mut command_changed = false;
         if cmd.starts_with("!") {
             let s = cmd.strip_prefix("!").unwrap().trim();
@@ -84,6 +79,7 @@ fn main() -> ! {
             history.push(&cmd);
         }
 
+        // lexical analysis
         let tokens: Vec<String> = cmd
             .split_whitespace()
             .map(|s| {
@@ -97,70 +93,101 @@ fn main() -> ! {
             .collect();
         let commands: Vec<&[String]> = tokens.split(|s| s == "|").collect();
 
-        // util function to divide program name and args from a command
-        let parse_command = |command: &[String]| -> (String, Vec<String>) {
-            let mut token_iter = command.iter();
-            let prog = token_iter.next().cloned().unwrap_or_default();
-            let args = token_iter.map(|s| s.to_owned()).collect();
-            (prog, args)
-        };
-
         // execute commands
         INPUTING.store(false, Ordering::Relaxed);
-        EXITCODE.store(0, Ordering::Relaxed);
-        match commands.len() {
-            0 => continue,
-            1 => {
-                let command = commands[0];
-                let (prog, args) = parse_command(command);
-                match prog.as_str() {
-                    "history" | "cd" | "export" | "exit" => do_built_in(&prog, &args, &mut history),
-                    _ => {
-                        if let Ok(_) = Command::new(&prog).args(&args).spawn() {
-                            while match wait() {
-                                Err(Errno::ECHILD) => false,
-                                Ok(WaitStatus::Exited(_, code)) => {
-                                    EXITCODE.store(code, Ordering::Relaxed);
-                                    true
-                                }
-                                _ => true,
-                            } {}
-                        }
-                    }
+        if commands.len() == 1 {
+            // may call build-in functions
+            let mut token_iter = commands[0].iter();
+            let prog = token_iter.next().cloned().unwrap_or_default();
+            let args = token_iter.map(|s| s.to_owned()).collect();
+            match prog.as_str() {
+                "" | "history" | "cd" | "export" | "exit" => {
+                    do_built_in(&prog, &args, &mut history);
+                    continue;
                 }
+                _ => (),
             }
-            _ => {
-                let mut command_iter = commands.iter().peekable();
+        }
+        // else build pipes
+        let mut subprocess_stdin = Stdio::inherit();
+        let mut subprocess_stdout = Stdio::piped();
+        let mut command_iter = commands.iter().peekable();
+        while let Some(command) = command_iter.next() {
+            let last = command_iter.peek().is_none();
+            let cur_process_stdout = if last {
+                Stdio::inherit()
+            } else {
+                subprocess_stdout
+            };
+            match execute_command(command, last, subprocess_stdin, cur_process_stdout) {
+                Some((stdin, stdout)) => {
+                    (subprocess_stdin, subprocess_stdout) = (stdin, stdout);
+                }
+                _ => break,
+            }
+        }
 
-                // stdin and stdout are changed in loop
-                let mut stdin = Stdio::inherit();
-                let mut stdout = Stdio::piped();
-                while let Some(command) = command_iter.next() {
-                    let cur_process_stdout = if command_iter.peek().is_none() {
-                        Stdio::inherit()
-                    } else {
-                        stdout
-                    };
-                    let (prog, args) = parse_command(command);
-                    let mut child = Command::new(&prog)
-                        .args(&args)
-                        .stdin(stdin)
-                        .stdout(cur_process_stdout)
-                        .spawn()
-                        .expect("fail to execute");
-                    if command_iter.peek().is_some() {
-                        stdin = Stdio::from(child.stdout.take().expect("failed to open fd"));
-                        stdout = Stdio::piped();
-                    } else {
-                        // only for rust analyzer... in fact only the last one goes here :)
-                        break;
-                    }
+        // wait for all subprocesses
+        while match wait() {
+            Ok(_) => true,
+            _ => false,
+        } {}
+    }
+}
+
+/// run one command. take redirection into consideration
+/// last: if the command is the last one (in pipe)
+/// stdin and stdout are suggestions. redirections are prior
+fn execute_command(
+    command: &[String],
+    last: bool,
+    mut stdin: Stdio,
+    mut stdout: Stdio,
+) -> Option<(Stdio, Stdio)> {
+    let mut last_command_index = command.len();
+    let mut redirect =
+        |token: &str, stdio: &mut Stdio, read: bool, write: bool, append: bool| -> () {
+            if let Some(index) = command.iter().position(|_token| _token == token) {
+                let file_path = command.get(index + 1).expect("error syntax");
+                if File::open(file_path).is_err() && (write || append) {
+                    File::create(file_path).expect("error create file");
                 }
-                while match wait() {
-                    Ok(_) => true,
-                    _ => false,
-                } {}
+                let file = OpenOptions::new()
+                    .read(read)
+                    .write(write)
+                    .append(append)
+                    .open(file_path)
+                    .expect("error open file");
+                *stdio = Stdio::from(file);
+                last_command_index = min(last_command_index, index)
             }
+        };
+    redirect("<", &mut stdin, true, false, false);
+    redirect(">", &mut stdout, false, true, false);
+    redirect(">>", &mut stdout, false, true, true);
+
+    let mut token_iter = command[0..last_command_index].iter();
+    let prog = token_iter.next().cloned().unwrap_or_default();
+    let args: Vec<String> = token_iter.map(|s| s.to_owned()).collect();
+    let child = Command::new(&prog)
+        .args(&args)
+        .stdin(stdin)
+        .stdout(stdout)
+        .spawn();
+    match child {
+        Ok(mut child) => {
+            if last {
+                None
+            } else {
+                Some((
+                    Stdio::from(child.stdout.take().expect("failed to open fd")),
+                    Stdio::piped(),
+                ))
+            }
+        }
+        _ => {
+            println!("failed to start subprocess");
+            None
         }
     }
 }
@@ -222,10 +249,6 @@ fn do_built_in(prog: &String, args: &Vec<String>, history: &mut History) -> () {
 }
 
 fn print_prompt() -> () {
-    let exit_code = EXITCODE.load(Ordering::Relaxed);
-    if exit_code != 0 {
-        print!("{}[{}]{}", COLOR_RED, exit_code, CLEAR_COLOR);
-    }
     print!("{}{}{}> ", COLOR_GREEN, &prompt_path(), CLEAR_COLOR);
     io::stdout().flush().expect("error printing prompt");
 }
