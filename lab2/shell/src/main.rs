@@ -96,13 +96,13 @@ fn main() -> ! {
         // execute commands
         INPUTING.store(false, Ordering::Relaxed);
         if commands.len() == 1 {
-            // may call build-in functions
+            // may call built-in functions
             let mut token_iter = commands[0].iter();
             let prog = token_iter.next().cloned().unwrap_or_default();
-            let args = token_iter.map(|s| s.to_owned()).collect();
             match prog.as_str() {
                 "" | "history" | "cd" | "export" | "exit" => {
-                    do_built_in(&prog, &args, &mut history);
+                    let args = token_iter.map(|s| s.to_owned()).collect();
+                    do_built_in(&prog, &args, &history);
                     continue;
                 }
                 _ => (),
@@ -135,9 +135,9 @@ fn main() -> ! {
     }
 }
 
-/// run one command. take redirection into consideration
+/// execute one command, may be with redirection, like "ls > out"
 /// last: if the command is the last one (in pipe)
-/// stdin and stdout are suggestions. redirections are prior
+/// stdin and stdout are suggested by pipe. redirections are prior
 fn execute_command(
     command: &[String],
     last: bool,
@@ -193,7 +193,7 @@ fn execute_command(
 }
 
 /// built-in commands
-fn do_built_in(prog: &String, args: &Vec<String>, history: &mut History) -> () {
+fn do_built_in(prog: &String, args: &Vec<String>, history: &History) -> () {
     match prog.as_str() {
         "history" => {
             let number = args.get(0).cloned().unwrap_or_default();
