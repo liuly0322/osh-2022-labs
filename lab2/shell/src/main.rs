@@ -215,19 +215,10 @@ fn do_built_in(prog: &String, args: &Vec<String>, history: &History) -> () {
             let dir = match dir {
                 Some(dir) if dir == "~" || dir.starts_with("~/") => match home {
                     Ok(home) => home + dir.strip_prefix("~").unwrap(),
-                    _ => {
-                        println!("$HOME is unset");
-                        String::new()
-                    }
+                    _ => String::new(),
                 },
                 Some(dir) => dir,
-                _ => match home {
-                    Ok(home) => home,
-                    _ => {
-                        println!("$HOME is unset");
-                        String::new()
-                    }
-                },
+                _ => home.unwrap_or_default(),
             };
             if let Err(_) = env::set_current_dir(dir) {
                 println!("Changing current dir failed")
@@ -249,16 +240,10 @@ fn do_built_in(prog: &String, args: &Vec<String>, history: &History) -> () {
 }
 
 fn print_prompt() -> () {
-    print!("{}{}{}> ", COLOR_GREEN, &prompt_path(), CLEAR_COLOR);
-    io::stdout().flush().expect("error printing prompt");
-}
-
-fn prompt_path() -> String {
-    let cwd = env::current_dir().expect("Getting current dir failed");
-    let cwd = cwd.as_path();
-    let home = env::var("HOME");
     let path_err = "Invalid path name";
-    match home {
+    let cwd = env::current_dir().expect("Getting current dir failed");
+    let home = env::var("HOME");
+    let path = match home {
         Ok(home) => {
             if cwd == Path::new(&home) {
                 "~".to_string()
@@ -274,5 +259,7 @@ fn prompt_path() -> String {
             }
         }
         _ => cwd.to_str().expect(path_err).to_string(),
-    }
+    };
+    print!("{}{}{}> ", COLOR_GREEN, &path, CLEAR_COLOR);
+    io::stdout().flush().expect("error printing prompt");
 }
