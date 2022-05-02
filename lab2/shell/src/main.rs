@@ -31,7 +31,10 @@ fn main() -> ! {
     let home = env::var("HOME");
     let history_file_name = match home {
         Ok(home) => home + "/.llysh_history",
-        _ => "/tmp/.llysh_history".to_string(),
+        _ => {
+            println!("Warning: $HOME is unset. May lead to several issues!");
+            "/tmp/.llysh_history".to_string()
+        }
     };
     let mut history = History::new(history_file_name).expect("History file i/o error");
 
@@ -43,38 +46,13 @@ fn main() -> ! {
         // read line
         let mut cmd = String::new();
         if let Some(0) = stdin().read_line(&mut cmd).ok() {
+            println!();
             exit(0)
         }
-        let mut cmd = cmd.trim().to_string();
+        cmd = cmd.trim().to_string();
 
         // pre-processing, if ! and !!
-        // then replace with actuall command from history
-        let mut command_changed = false;
-        if cmd.starts_with("!") {
-            let s = cmd.strip_prefix("!").unwrap().trim();
-            cmd = if s.starts_with("!") {
-                command_changed = true;
-                match history.last().cloned() {
-                    Some(cmd) => cmd,
-                    _ => continue,
-                }
-            } else {
-                let number = s.parse::<usize>();
-                match number {
-                    Err(_) => continue,
-                    Ok(number) => {
-                        command_changed = true;
-                        match history.get(number).cloned() {
-                            Some(cmd) => cmd,
-                            _ => continue,
-                        }
-                    }
-                }
-            };
-        }
-        if command_changed {
-            println!("> {}{}{}", COLOR_YELLOW, &cmd, CLEAR_COLOR)
-        }
+        let cmd = replace_from_history(&cmd, &history).unwrap_or(cmd);
         if cmd != history.last().cloned().unwrap_or_default() {
             history.push(&cmd);
         }
@@ -102,7 +80,9 @@ fn main() -> ! {
             match prog.as_str() {
                 "" | "history" | "cd" | "export" | "exit" => {
                     let args = token_iter.map(|s| s.to_owned()).collect();
-                    do_built_in(&prog, &args, &history);
+                    if do_built_in(&prog, &args, &history).is_none() {
+                        println!("Error occured in built-in command {}", &prog)
+                    };
                     continue;
                 }
                 _ => (),
@@ -146,25 +126,26 @@ fn execute_command(
 ) -> Option<(Stdio, Stdio)> {
     let mut last_command_index = command.len();
     let mut redirect =
-        |token: &str, stdio: &mut Stdio, read: bool, write: bool, append: bool| -> () {
+        |token: &str, stdio: &mut Stdio, read: bool, write: bool, append: bool| -> Option<()> {
             if let Some(index) = command.iter().position(|_token| _token == token) {
-                let file_path = command.get(index + 1).expect("error syntax");
+                let file_path = command.get(index + 1)?;
                 if File::open(file_path).is_err() && (write || append) {
-                    File::create(file_path).expect("error create file");
+                    File::create(file_path).ok()?;
                 }
                 let file = OpenOptions::new()
                     .read(read)
                     .write(write)
                     .append(append)
                     .open(file_path)
-                    .expect("error open file");
+                    .ok()?;
                 *stdio = Stdio::from(file);
                 last_command_index = min(last_command_index, index)
             }
+            Some(())
         };
-    redirect("<", &mut stdin, true, false, false);
-    redirect(">", &mut stdout, false, true, false);
-    redirect(">>", &mut stdout, false, true, true);
+    redirect("<", &mut stdin, true, false, false)?;
+    redirect(">", &mut stdout, false, true, false)?;
+    redirect(">>", &mut stdout, false, true, true)?;
 
     let mut token_iter = command[0..last_command_index].iter();
     let prog = token_iter.next().cloned().unwrap_or_default();
@@ -174,36 +155,23 @@ fn execute_command(
         .stdin(stdin)
         .stdout(stdout)
         .spawn();
-    match child {
-        Ok(mut child) => {
-            if last {
-                None
-            } else {
-                Some((
-                    Stdio::from(child.stdout.take().expect("failed to open fd")),
-                    Stdio::piped(),
-                ))
-            }
-        }
-        _ => {
-            println!("failed to start subprocess");
-            None
-        }
+    if child.is_err() {
+        println!("failed to start: {}", &prog);
     }
+    (!last).then(|| child)?.ok().map(|mut child| {
+        Some((
+            Stdio::from(child.stdout.take().expect("failed to open fd")),
+            Stdio::piped(),
+        ))
+    })?
 }
 
 /// built-in commands
-fn do_built_in(prog: &String, args: &Vec<String>, history: &History) -> () {
+fn do_built_in(prog: &String, args: &Vec<String>, history: &History) -> Option<()> {
     match prog.as_str() {
         "history" => {
             let number = args.get(0).cloned().unwrap_or_default();
-            let number = match number.parse::<usize>() {
-                Ok(number) => number,
-                _ => {
-                    println!("Invalid input. Show 10 results...");
-                    10
-                }
-            };
+            let number = number.parse::<usize>().ok()?;
             let history_size = history.size();
             for i in (0..min(number, history_size)).rev() {
                 println!("{:5}  {}", history_size - i, history.rget(i).unwrap())
@@ -211,24 +179,21 @@ fn do_built_in(prog: &String, args: &Vec<String>, history: &History) -> () {
         }
         "cd" => {
             let dir = args.get(0).cloned();
-            let home = env::var("HOME");
+            let home = env::var("HOME").unwrap_or_default();
             let dir = match dir {
-                Some(dir) if dir == "~" || dir.starts_with("~/") => match home {
-                    Ok(home) => home + dir.strip_prefix("~").unwrap(),
-                    _ => String::new(),
-                },
+                Some(dir) if dir == "~" || dir.starts_with("~/") => {
+                    home + dir.strip_prefix("~").unwrap()
+                }
                 Some(dir) => dir,
-                _ => home.unwrap_or_default(),
+                _ => home,
             };
-            if let Err(_) = env::set_current_dir(dir) {
-                println!("Changing current dir failed")
-            }
+            env::set_current_dir(dir).ok()?
         }
         "export" => {
             for arg in args {
                 let mut assign = arg.split("=");
-                let name = assign.next().expect("No variable name");
-                let value = assign.next().expect("No variable value");
+                let name = assign.next()?;
+                let value = assign.next()?;
                 env::set_var(name, value);
             }
         }
@@ -237,29 +202,40 @@ fn do_built_in(prog: &String, args: &Vec<String>, history: &History) -> () {
         }
         _ => (),
     }
+    Some(())
 }
 
 fn print_prompt() -> () {
     let path_err = "Invalid path name";
     let cwd = env::current_dir().expect("Getting current dir failed");
-    let home = env::var("HOME");
-    let path = match home {
-        Ok(home) => {
-            if cwd == Path::new(&home) {
-                "~".to_string()
-            } else if cwd.starts_with(&home) {
-                "~/".to_string()
-                    + cwd
-                        .strip_prefix(&home)
-                        .expect(path_err)
-                        .to_str()
-                        .expect(path_err)
-            } else {
-                cwd.to_str().expect(path_err).to_string()
-            }
-        }
-        _ => cwd.to_str().expect(path_err).to_string(),
+    let home = env::var("HOME").unwrap_or_default();
+    let path = if cwd == Path::new(&home) {
+        "~".to_string()
+    } else if !home.is_empty() && cwd.starts_with(&home) {
+        "~/".to_string()
+            + cwd
+                .strip_prefix(&home)
+                .expect(path_err)
+                .to_str()
+                .expect(path_err)
+    } else {
+        cwd.to_str().expect(path_err).to_string()
     };
     print!("{}{}{}> ", COLOR_GREEN, &path, CLEAR_COLOR);
     io::stdout().flush().expect("error printing prompt");
+}
+
+/// return the origin command if available
+fn replace_from_history(cmd: &String, history: &History) -> Option<String> {
+    let arg = cmd
+        .starts_with("!")
+        .then(|| cmd.strip_prefix("!").unwrap().trim())?;
+    let cmd = if arg.starts_with("!") {
+        history.last().cloned()?
+    } else {
+        let number = arg.parse::<usize>().ok()?;
+        history.get(number).cloned()?
+    };
+    println!("> {}{}{}", COLOR_YELLOW, &cmd, CLEAR_COLOR);
+    Some(cmd)
 }
