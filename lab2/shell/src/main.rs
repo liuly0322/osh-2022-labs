@@ -49,10 +49,9 @@ fn main() -> ! {
             println!();
             exit(0)
         }
-        cmd = cmd.trim().to_string();
 
         // pre-processing, if ! and !!
-        let cmd = replace_from_history(&cmd, &history).unwrap_or(cmd);
+        let cmd = replace_from_history(cmd.trim(), &history).unwrap_or(cmd);
         if cmd != history.last().cloned().unwrap_or_default() {
             history.push(&cmd);
         }
@@ -60,54 +59,34 @@ fn main() -> ! {
         // lexical analysis
         let tokens: Vec<String> = cmd
             .split_whitespace()
-            .map(|s| {
-                if s.starts_with("$") {
-                    let key = s.strip_prefix("$").unwrap();
+            .map(|token| {
+                if token.starts_with("$") {
+                    let key = token.strip_prefix("$").unwrap();
                     env::var(key).unwrap_or_default()
                 } else {
-                    s.to_string()
+                    token.to_string()
                 }
             })
             .collect();
-        let commands: Vec<&[String]> = tokens.split(|s| s == "|").collect();
+        let commands: Vec<&[String]> = tokens.split(|token| token == "|").collect();
 
         // execute commands
         INPUTING.store(false, Ordering::Relaxed);
-        if commands.len() == 1 {
-            // may call built-in functions
-            let mut token_iter = commands[0].iter();
-            let prog = token_iter.next().cloned().unwrap_or_default();
-            match prog.as_str() {
-                "" | "history" | "cd" | "export" | "exit" => {
-                    let args = token_iter.map(|s| s.to_owned()).collect();
-                    if do_built_in(&prog, &args, &history).is_none() {
-                        println!("Error occured in built-in command {}", &prog)
-                    };
-                    continue;
-                }
-                _ => (),
-            }
-        }
-        // else build pipes
-        let mut subprocess_stdin = Stdio::inherit();
-        let mut subprocess_stdout = Stdio::piped();
+        // build pipes
+        let mut child_stdin = Stdio::inherit();
+        let mut child_stdout = Stdio::piped();
         let mut command_iter = commands.iter().peekable();
         while let Some(command) = command_iter.next() {
             let last = command_iter.peek().is_none();
-            let cur_process_stdout = if last {
-                Stdio::inherit()
-            } else {
-                subprocess_stdout
-            };
-            match execute_command(command, last, subprocess_stdin, cur_process_stdout) {
+            let cur_child_stdout = if last { Stdio::inherit() } else { child_stdout };
+            match execute_command(command, last, &history, child_stdin, cur_child_stdout) {
                 Some((stdin, stdout)) => {
-                    (subprocess_stdin, subprocess_stdout) = (stdin, stdout);
+                    (child_stdin, child_stdout) = (stdin, stdout);
                 }
                 _ => break,
             }
         }
-
-        // wait for all subprocesses
+        // wait for all childs
         while match wait() {
             Ok(_) => true,
             _ => false,
@@ -121,6 +100,7 @@ fn main() -> ! {
 fn execute_command(
     command: &[String],
     last: bool,
+    history: &History,
     mut stdin: Stdio,
     mut stdout: Stdio,
 ) -> Option<(Stdio, Stdio)> {
@@ -150,15 +130,20 @@ fn execute_command(
     let mut token_iter = command[0..last_command_index].iter();
     let prog = token_iter.next().cloned().unwrap_or_default();
     let args: Vec<String> = token_iter.map(|s| s.to_owned()).collect();
-    let child = Command::new(&prog)
+    if let "" | "history" | "cd" | "export" | "exit" = prog.as_str() {
+        if let None = do_built_in(&prog, &args, &history) {
+            println!("Error occured in built-in command {}", &prog)
+        };
+        return None;
+    }
+    let mut child = Command::new(&prog)
         .args(&args)
         .stdin(stdin)
         .stdout(stdout)
-        .spawn();
-    if child.is_err() {
-        println!("failed to start: {}", &prog);
-    }
-    (!last).then(|| child)?.ok().map(|mut child| {
+        .spawn()
+        .or_else(|_| Err(println!("{}: command not found", &prog)))
+        .ok()?;
+    (!last).then(|| {
         Some((
             Stdio::from(child.stdout.take().expect("failed to open fd")),
             Stdio::piped(),
@@ -170,7 +155,7 @@ fn execute_command(
 fn do_built_in(prog: &String, args: &Vec<String>, history: &History) -> Option<()> {
     match prog.as_str() {
         "history" => {
-            let number = args.get(0).cloned().unwrap_or_default();
+            let number = args.get(0)?;
             let number = number.parse::<usize>().ok()?;
             let history_size = history.size();
             for i in (0..min(number, history_size)).rev() {
@@ -226,7 +211,7 @@ fn print_prompt() -> () {
 }
 
 /// return the origin command if available
-fn replace_from_history(cmd: &String, history: &History) -> Option<String> {
+fn replace_from_history(cmd: &str, history: &History) -> Option<String> {
     let arg = cmd
         .starts_with("!")
         .then(|| cmd.strip_prefix("!").unwrap().trim())?;
