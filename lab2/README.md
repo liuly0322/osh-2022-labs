@@ -29,3 +29,5 @@ cargo build --release
 ~~可以自行使用 `~/.llysh_history` 获取想要的信息~~
 
 ## Strace
+
+`make` 即可
