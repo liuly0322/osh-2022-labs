@@ -155,8 +155,7 @@ fn execute_command(
 fn do_built_in(prog: &String, args: &Vec<String>, history: &History) -> Option<()> {
     match prog.as_str() {
         "history" => {
-            let number = args.get(0)?;
-            let number = number.parse::<usize>().ok()?;
+            let number = args.get(0)?.parse::<usize>().ok()?;
             let history_size = history.size();
             for i in (0..min(number, history_size)).rev() {
                 println!("{:5}  {}", history_size - i, history.rget(i).unwrap())
@@ -177,9 +176,9 @@ fn do_built_in(prog: &String, args: &Vec<String>, history: &History) -> Option<(
         "export" => {
             for arg in args {
                 let mut assign = arg.split("=");
-                let name = assign.next()?;
+                let key = assign.next()?;
                 let value = assign.next()?;
-                env::set_var(name, value);
+                env::set_var(key, value);
             }
         }
         "exit" => {
