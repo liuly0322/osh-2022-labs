@@ -46,7 +46,7 @@ fn main() -> ! {
         // read line
         let mut command = String::new();
         // EOF handling
-        if let Some(0) = stdin().read_line(&mut command).ok() {
+        if let Ok(0) = stdin().read_line(&mut command) {
             println!();
             exit(0)
         }
@@ -62,7 +62,7 @@ fn main() -> ! {
         // seperate commands by pipes
         let commands: Vec<&[String]> = tokens.split(|token| token == "|").collect();
 
-        // build pipes and execute commands
+        // execute commands and concat them with pipes
         INPUTING.store(false, Ordering::Relaxed);
         let mut child_stdin = Stdio::inherit();
         let mut child_stdout = Stdio::piped();
@@ -79,10 +79,7 @@ fn main() -> ! {
         }
 
         // wait for all childs
-        while match wait() {
-            Ok(_) => true,
-            _ => false,
-        } {}
+        while matches!(wait(), Ok(_)) {}
     }
 }
 
@@ -123,9 +120,9 @@ fn execute_command(
     let prog = token_iter.next().cloned().unwrap_or_default();
     let args: Vec<String> = token_iter.map(|s| s.to_owned()).collect();
     if let "" | "history" | "cd" | "export" | "exit" = prog.as_str() {
-        if let None = do_built_in(&prog, &args, &history) {
+        if do_built_in(&prog, &args, history).is_none() {
             println!("Error occured in built-in command {}", &prog)
-        };
+        }
         return None;
     }
     let mut child = Command::new(&prog)
@@ -133,14 +130,14 @@ fn execute_command(
         .stdin(stdin)
         .stdout(stdout)
         .spawn()
-        .or_else(|_| Err(println!("{}: command not found", &prog)))
+        .map_err(|_| println!("{}: command not found", &prog))
         .ok()?;
     (!last).then(|| Some((Stdio::from(child.stdout.take()?), Stdio::piped())))?
 }
 
 /// built-in commands
-fn do_built_in(prog: &String, args: &Vec<String>, history: &History) -> Option<()> {
-    match prog.as_str() {
+fn do_built_in(prog: &str, args: &Vec<String>, history: &History) -> Option<()> {
+    match prog {
         "history" => {
             let number = args.get(0)?.parse::<usize>().ok()?;
             let history_size = history.size();
@@ -155,7 +152,7 @@ fn do_built_in(prog: &String, args: &Vec<String>, history: &History) -> Option<(
         }
         "export" => {
             for arg in args {
-                let mut assign = arg.split("=");
+                let mut assign = arg.split('=');
                 let key = assign.next()?;
                 let value = assign.next()?;
                 env::set_var(key, value);
@@ -174,12 +171,12 @@ fn get_tokens(command: String) -> Vec<String> {
     command
         .split_whitespace()
         .map(|token| {
-            if token.starts_with("$") {
-                let key = token.strip_prefix("$").unwrap();
+            if token.starts_with('$') {
+                let key = token.strip_prefix('$').unwrap();
                 env::var(key).unwrap_or_default()
             } else if token == "~" || (token.starts_with("~/")) {
                 let home = env::var("HOME").unwrap_or_default();
-                home + token.strip_prefix("~").unwrap()
+                home + token.strip_prefix('~').unwrap()
             } else {
                 token.to_string()
             }
@@ -192,7 +189,7 @@ fn print_prompt() -> Option<()> {
     let cwd = env::current_dir().ok()?;
     let home = env::var("HOME").unwrap_or_default();
     let path = if cwd == Path::new(&home) {
-        "~".to_string()
+        '~'.to_string()
     } else if !home.is_empty() && cwd.starts_with(&home) {
         "~/".to_string() + cwd.strip_prefix(&home).ok()?.to_str()?
     } else {
@@ -204,11 +201,11 @@ fn print_prompt() -> Option<()> {
 }
 
 /// return the origin command if available
-fn replace_from_history(command: &String, history: &History) -> Option<String> {
+fn replace_from_history(command: &str, history: &History) -> Option<String> {
     let arg = command
-        .starts_with("!")
-        .then(|| command.strip_prefix("!").unwrap().trim())?;
-    let command = if arg.starts_with("!") {
+        .starts_with('!')
+        .then(|| command.strip_prefix('!').unwrap().trim())?;
+    let command = if arg.starts_with('!') {
         history.last().cloned()?
     } else {
         let number = arg.parse::<usize>().ok()?;

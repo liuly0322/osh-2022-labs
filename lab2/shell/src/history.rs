@@ -25,7 +25,7 @@ impl History {
         Ok(History { file_name, lines })
     }
 
-    pub fn push(&mut self, command: &String) -> () {
+    pub fn push(&mut self, command: &String) {
         self.lines.push(command.trim().to_string());
         let mut file = OpenOptions::new()
             .append(true)
@@ -51,7 +51,7 @@ impl History {
     }
 
     pub fn rget(&self, num: usize) -> Option<&String> {
-        if self.size() >= num + 1 && self.size() - 1 - num < self.size() {
+        if self.size() > num && self.size() - 1 - num < self.size() {
             Some(&self.lines[self.size() - 1 - num])
         } else {
             None
