@@ -28,15 +28,10 @@ fn main() -> ! {
     unsafe { signal(Signal::SIGINT, SigHandler::Handler(handle_sigint)) }
         .expect("Error changing SIGINT handler");
 
-    let home = env::var("HOME");
-    let history_file_name = match home {
-        Ok(home) => home + "/.llysh_history",
-        _ => {
-            println!("Warning: $HOME is unset. May lead to several issues!");
-            "/tmp/.llysh_history".to_string()
-        }
-    };
-    let mut history = History::new(history_file_name).expect("History file i/o error");
+    // open or create history file
+    let history_file_name =
+        env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()) + "/.llysh_history";
+    let mut history = History::new(history_file_name).expect("Cannot open history file!");
 
     loop {
         // prompt message
@@ -51,18 +46,17 @@ fn main() -> ! {
             exit(0)
         }
 
-        // pre-processing, if ! and !!
+        // if the actuall command is from history
         let command = replace_from_history(&command, &history).unwrap_or(command);
         if command.trim() != history.last().cloned().unwrap_or_default() {
             history.push(&command);
         }
 
-        // lexical analysis
-        let tokens: Vec<String> = get_tokens(command);
         // seperate commands by pipes
+        let tokens: Vec<String> = get_tokens(command);
         let commands: Vec<&[String]> = tokens.split(|token| token == "|").collect();
 
-        // execute commands and concat them with pipes
+        // execute commands and concat their stdios with pipes
         INPUTING.store(false, Ordering::Relaxed);
         let mut child_stdin = Stdio::inherit();
         let mut child_stdout = Stdio::piped();
