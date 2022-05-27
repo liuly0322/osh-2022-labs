@@ -9,7 +9,7 @@ fn handle_client(mut stream: TcpStream, stream_write: &mut TcpStream) {
     let mut buffer = Vec::from(prompt);
     let mut data_recv = [0_u8; 1024];
     while match stream.read(&mut data_recv) {
-        Ok(size) => {
+        Ok(size) if size > 0 => {
             for x in data_recv[0..size].iter() {
                 buffer.push(*x);
                 if *x == b'\n' {
@@ -19,19 +19,16 @@ fn handle_client(mut stream: TcpStream, stream_write: &mut TcpStream) {
             }
             true
         }
-        _ => {
-            println!(
-                "An error occurred, terminating connection with {}",
-                stream.peer_addr().unwrap()
-            );
-            stream.shutdown(Shutdown::Both).unwrap();
-            false
-        }
+        _ => false,
     } {}
+    println!(
+        "Terminating connection with {}",
+        stream.peer_addr().unwrap()
+    );
+    stream.shutdown(Shutdown::Both).unwrap();
 }
 
 fn main() {
-    // get port
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         println!("Too few arguments.");
@@ -45,14 +42,12 @@ fn main() {
     let mut tcp1 = listener.accept().expect("Error handling first client!").0;
     let mut tcp2 = listener.accept().expect("Error handling second client!").0;
 
-    let tcp1_read = tcp1.try_clone().expect("clone failed!");
-    let tcp2_read = tcp2.try_clone().expect("clone failed!");
+    let tcp1_read = tcp1.try_clone().expect("Clone failed!");
+    let tcp2_read = tcp2.try_clone().expect("Clone failed!");
 
-    let a = thread::spawn(move || handle_client(tcp1_read, &mut tcp2));
-    let b = thread::spawn(move || handle_client(tcp2_read, &mut tcp1));
+    let tcp1_handler = thread::spawn(move || handle_client(tcp1_read, &mut tcp2));
+    let tcp2_handler = thread::spawn(move || handle_client(tcp2_read, &mut tcp1));
 
-    a.join().expect("thread panics!");
-    b.join().expect("thread panics!");
-
-    drop(listener);
+    tcp1_handler.join().expect("Thread panics!");
+    tcp2_handler.join().expect("Thread panics!");
 }
