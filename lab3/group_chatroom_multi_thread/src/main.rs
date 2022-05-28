@@ -82,9 +82,9 @@ fn handle_send(receiver: Receiver<Message>) {
             MessageType::ChatMessage => {
                 // send to all other clients
                 let content = received.content.unwrap_or_default();
-                for mut client in &clients {
-                    if *client.0 != received.client_id {
-                        client.1.write_all(content.as_slice()).unwrap();
+                for (id, mut client) in &clients {
+                    if *id != received.client_id {
+                        client.write_all(content.as_slice()).unwrap();
                     }
                 }
             }
