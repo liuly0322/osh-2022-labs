@@ -9,3 +9,5 @@
 ## 文件夹结构
 
 - dual_chat_room 双人聊天室
+
+- group_chatroom_multi_thread 多线程多人聊天室 `mpsc` 无锁队列
