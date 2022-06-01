@@ -82,10 +82,9 @@ fn main() -> io::Result<()> {
                     let mut stream = stream.try_clone()?;
 
                     // receive while not empty
-                    let mut first_recv = false;
+                    let mut exit_flag = false;
                     while match stream.read(&mut data_recv) {
                         Ok(size) if size > 0 => {
-                            first_recv = true;
                             let buffer = stream_buffers.get_mut(&id).unwrap();
                             for x in data_recv[0..size].iter() {
                                 buffer.push(*x);
@@ -100,14 +99,17 @@ fn main() -> io::Result<()> {
                             }
                             true
                         }
+                        Ok(0) => {
+                            println!("Terminating connection with {}", stream.peer_addr()?);
+                            tcp_streams.remove(&id);
+                            stream_buffers.remove(&id);
+                            stream.shutdown(Shutdown::Both)?;
+                            exit_flag = true;
+                            false
+                        }
                         _ => false,
                     } {}
-                    if !first_recv {
-                        println!("Terminating connection with {}", stream.peer_addr()?);
-                        tcp_streams.remove(&id);
-                        stream_buffers.remove(&id);
-                        stream.shutdown(Shutdown::Both)?;
-                    } else {
+                    if !exit_flag {
                         let poll_e = opcode::PollAdd::new(types::Fd(stream_fd), libc::POLLIN as _)
                             .build()
                             .user_data(id);

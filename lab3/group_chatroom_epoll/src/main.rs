@@ -96,10 +96,8 @@ fn main() -> io::Result<()> {
                     let mut stream = stream.try_clone().unwrap();
 
                     // receive while not empty
-                    let mut first_recv = false;
                     while match stream.read(&mut data_recv) {
                         Ok(size) if size > 0 => {
-                            first_recv = true;
                             let buffer = stream_buffers.get_mut(&id).unwrap();
                             for x in data_recv[0..size].iter() {
                                 buffer.push(*x);
@@ -114,24 +112,23 @@ fn main() -> io::Result<()> {
                             }
                             true
                         }
-                        _ => {
-                            if !first_recv {
-                                println!(
-                                    "Terminating connection with {}",
-                                    stream.peer_addr().unwrap()
-                                );
-                                syscall!(epoll_ctl(
-                                    epoll_fd,
-                                    libc::EPOLL_CTL_DEL,
-                                    stream_fd,
-                                    std::ptr::null_mut::<epoll_event>()
-                                ))?;
-                                tcp_streams.remove(&id);
-                                stream_buffers.remove(&id);
-                                stream.shutdown(Shutdown::Both).unwrap();
-                            }
+                        Ok(0) => {
+                            println!(
+                                "Terminating connection with {}",
+                                stream.peer_addr().unwrap()
+                            );
+                            syscall!(epoll_ctl(
+                                epoll_fd,
+                                libc::EPOLL_CTL_DEL,
+                                stream_fd,
+                                std::ptr::null_mut::<epoll_event>()
+                            ))?;
+                            tcp_streams.remove(&id);
+                            stream_buffers.remove(&id);
+                            stream.shutdown(Shutdown::Both).unwrap();
                             false
                         }
+                        _ => false,
                     } {}
                 }
             }
