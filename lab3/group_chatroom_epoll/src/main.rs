@@ -28,7 +28,7 @@ fn main() -> io::Result<()> {
         process::exit(1);
     }
     let port = &args[1];
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).unwrap();
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", port))?;
     listener.set_nonblocking(true)?;
     println!("Server listening on port {}", port);
     let listener_fd = listener.as_raw_fd();
@@ -93,7 +93,7 @@ fn main() -> io::Result<()> {
                 id => {
                     let stream = tcp_streams.get(&id).unwrap();
                     let stream_fd = stream.as_raw_fd();
-                    let mut stream = stream.try_clone().unwrap();
+                    let mut stream = stream.try_clone()?;
 
                     // receive while not empty
                     while match stream.read(&mut data_recv) {
@@ -104,7 +104,7 @@ fn main() -> io::Result<()> {
                                 if *x == b'\n' {
                                     for (stream_id, mut stream) in &tcp_streams {
                                         if *stream_id != id {
-                                            stream.write_all(buffer.as_slice()).unwrap();
+                                            stream.write_all(buffer.as_slice())?;
                                         }
                                     }
                                     *buffer = Vec::from(PROMPT);
@@ -113,10 +113,7 @@ fn main() -> io::Result<()> {
                             true
                         }
                         Ok(0) => {
-                            println!(
-                                "Terminating connection with {}",
-                                stream.peer_addr().unwrap()
-                            );
+                            println!("Terminating connection with {}", stream.peer_addr()?);
                             syscall!(epoll_ctl(
                                 epoll_fd,
                                 libc::EPOLL_CTL_DEL,
@@ -125,7 +122,7 @@ fn main() -> io::Result<()> {
                             ))?;
                             tcp_streams.remove(&id);
                             stream_buffers.remove(&id);
-                            stream.shutdown(Shutdown::Both).unwrap();
+                            stream.shutdown(Shutdown::Both)?;
                             false
                         }
                         _ => false,

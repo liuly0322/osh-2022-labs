@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::env;
+use std::io;
 use std::process;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::OwnedReadHalf;
@@ -106,7 +107,7 @@ async fn handle_send(mut receiver: Receiver<Message>) {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> io::Result<()> {
     // bind to the port and start listening
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
@@ -114,9 +115,7 @@ async fn main() {
         process::exit(1);
     }
     let port = &args[1];
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", port))
-        .await
-        .unwrap();
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
     println!("Server listening on port {}", port);
 
     // id of clients
@@ -128,8 +127,8 @@ async fn main() {
 
     // wait for clients
     loop {
-        let (stream, _) = listener.accept().await.unwrap();
-        println!("New connection: {}", stream.peer_addr().unwrap());
+        let (stream, _) = listener.accept().await?;
+        println!("New connection: {}", stream.peer_addr()?);
 
         // notice the receiver there is a new client
         let (stream, stream_for_write) = stream.into_split();

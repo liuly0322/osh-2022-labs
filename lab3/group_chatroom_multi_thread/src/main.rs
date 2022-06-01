@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use std::env;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::process;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+use std::{env, io};
 
 enum MessageType {
     ChatMessage,
@@ -100,7 +100,7 @@ fn handle_send(receiver: Receiver<Message>) {
     }
 }
 
-fn main() {
+fn main() -> io::Result<()> {
     // bind to the port and start listening
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
@@ -108,7 +108,7 @@ fn main() {
         process::exit(1);
     }
     let port = &args[1];
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).unwrap();
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", port))?;
     println!("Server listening on port {}", port);
 
     // id of clients
@@ -124,10 +124,10 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                println!("New connection: {}", stream.peer_addr().unwrap());
+                println!("New connection: {}", stream.peer_addr()?);
 
                 // notice the receiver there is a new client
-                let stream_for_write = stream.try_clone().unwrap();
+                let stream_for_write = stream.try_clone()?;
                 sender
                     .send(Message::new(
                         client_cnt,
@@ -150,4 +150,6 @@ fn main() {
             }
         }
     }
+
+    Ok(())
 }
