@@ -12,6 +12,7 @@
 - group_chatroom_multi_thread 多线程多人聊天室， `mpsc` 无锁队列
 - group_chatroom_epoll 多人聊天室的 `epoll` I/O 复用实现
 - group_chatroom_async 多人聊天室的异步协程实现，采用 `tokio` 库
+- group_chatroom_io_uring 多人聊天室的 `io_uring` 实现
 
 ## 说明
 
